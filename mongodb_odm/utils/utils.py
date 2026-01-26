@@ -1,6 +1,6 @@
 import re
 import types
-from typing import Any, Optional, Union
+from typing import Any, Optional, TypeVar, Union
 
 from mongodb_odm.fields import RelationshipInfo
 from mongodb_odm.utils._internal_models import RelationalFieldInfo
@@ -10,7 +10,7 @@ from typing_extensions import get_args, get_origin
 UnionType = getattr(types, "UnionType", Union)
 NoneType = type(None)
 pattern = re.compile(r"(?<!^)(?=[A-Z])")
-
+T = TypeVar("T")
 
 def camel_to_snake(string: str) -> str:
     return pattern.sub("_", string).lower()
@@ -135,3 +135,12 @@ def get_relationship_fields_info(
             fields_name.append(field_name)
 
     return _get_fields_info(cls, fields_name)
+
+def get_all_subclasses(cls: type[T]) -> set[type[T]]:
+    """
+    Recursively find all subclasses of a given class.
+    """
+    subclasses = set(cls.__subclasses__())
+    for child in list(subclasses):
+        subclasses.update(get_all_subclasses(child))
+    return subclasses

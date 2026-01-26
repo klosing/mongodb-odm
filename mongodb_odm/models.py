@@ -15,6 +15,7 @@ from mongodb_odm.types import DICT_TYPE, SORT_TYPE, ODMObjectId, WriteOp
 from mongodb_odm.utils._internal_models import CollectionConfig, RelationalFieldInfo
 from mongodb_odm.utils.utils import (
     convert_model_to_collection,
+    get_all_subclasses,
     get_database_name,
     get_model_fields,
     get_relationship_fields_info,
@@ -38,6 +39,7 @@ RELATION_TYPE = dict[str, RelationalFieldInfo]
 
 _cashed_collection: dict[Any, CollectionConfig] = {}
 _cashed_field_info: dict[str, RELATION_TYPE] = {}
+_cached_inheritance_keys: dict[Any, DICT_TYPE] = {}
 
 
 def _clear_cache() -> None:
@@ -47,6 +49,9 @@ def _clear_cache() -> None:
 
     for key in list(_cashed_field_info.keys()):
         del _cashed_field_info[key]
+
+    for key in list(_cached_inheritance_keys.keys()):
+        del _cached_inheritance_keys[key]
 
 
 class ODMMeta(ModelMetaclass):
@@ -116,37 +121,31 @@ class _BaseDocument(BaseModel, metaclass=ODMMeta):
         return self.model_dump(**kwargs)
 
     @classmethod
-    def __get_collection_class(cls) -> tuple[str, Optional[str]]:
+    def _get_collection_class(cls) -> tuple[Any, Optional[Any]]:
         """
         Get model class.
-        if called from a child class:
-            return (parent-class, child-class)
-        else:
-            return (class, None)
+        Returns: (RootModel, CurrentModel)
         """
-        model: Any = cls
-        if model.__base__ != Document:
-            base_model = model.__base__
-            if (
-                not hasattr(base_model.ODMConfig, "allow_inheritance")
-                or base_model.ODMConfig.allow_inheritance is not True
-            ):
-                raise InvalidConfiguration(
-                    f"Invalid model inheritance. {base_model} does not allow model inheritance."
-                )
-            if (
-                base_model.ODMConfig.allow_inheritance is True
-                and model.ODMConfig.allow_inheritance is True
-            ):
-                raise InvalidConfiguration(
-                    f"Child Model{model.__name__} should declare a separate ODMConfig class."
-                )
-            return base_model, model
-        else:
-            return model, None
+        if cls.__name__ == "Document" and cls.__module__ == "mongodb_odm.models":
+             raise InvalidConfiguration("The Document class should not be used as a model directly")
+
+        root = cls
+        for base in cls.__mro__:
+            if base.__name__ == "Document" and base.__module__ == "mongodb_odm.models":
+                break
+            if hasattr(base, "ODMConfig"):
+                root = base
+
+        if root == cls:
+            return root, None
+
+        if not (hasattr(root.ODMConfig, "allow_inheritance") and root.ODMConfig.allow_inheritance is True):
+            raise InvalidConfiguration("The parent should have ODMConfig with allow_inheritance=True")
+
+        return root, cls
 
     @classmethod
-    def __get_collection_config(cls) -> CollectionConfig:
+    def _get_collection_config(cls) -> CollectionConfig:
         """
         Get collection configuration for a model.
         Get data from the cache if it is already calculated.
@@ -155,12 +154,12 @@ class _BaseDocument(BaseModel, metaclass=ODMMeta):
         if cls in _cashed_collection:
             return _cashed_collection[cls]
 
-        model, child_model = cls.__get_collection_class()
+        model, child_model = cls._get_collection_class()
 
         has_children = False
         if (
-            hasattr(cls.ODMConfig, "allow_inheritance")
-            and cls.ODMConfig.allow_inheritance is True
+            hasattr(model.ODMConfig, "allow_inheritance")
+            and model.ODMConfig.allow_inheritance is True
         ):
             """Check if this is a model that allows inheritance and has a child model."""
             has_children = len(cls.__subclasses__()) > 0
@@ -178,26 +177,26 @@ class _BaseDocument(BaseModel, metaclass=ODMMeta):
 
     @classmethod
     def _database_name(cls) -> Optional[str]:
-        config = cls.__get_collection_config()
+        config = cls._get_collection_config()
         return config.database_name
 
     @classmethod
     def _get_collection_name(cls) -> str:
-        return cls.__get_collection_config().collection_name
+        return cls._get_collection_config().collection_name
 
     @classmethod
     def _get_child(cls) -> Optional[str]:
         """
         Get the child collection name if it has a parent class.
         """
-        return cls.__get_collection_config().child_collection_name
+        return cls._get_collection_config().child_collection_name
 
     @classmethod
     def _has_children(cls) -> bool:
         """
         Check if a model has child class
         """
-        return cls.__get_collection_config().has_children
+        return cls._get_collection_config().has_children
 
     @classmethod
     def _get_collection(cls) -> Collection[Any]:
@@ -222,13 +221,31 @@ class _BaseDocument(BaseModel, metaclass=ODMMeta):
         """
         Get child filter keys
         """
-        return {INHERITANCE_FIELD_NAME: cls._get_child()}
+        global _cached_inheritance_keys
+        if cls in _cached_inheritance_keys:
+            return _cached_inheritance_keys[cls]
+
+        own_name = convert_model_to_collection(cls)
+
+        result: DICT_TYPE
+
+        if not cls._has_children():
+            result = {INHERITANCE_FIELD_NAME: own_name}
+        else:
+            allowed_names = {own_name}
+            for sub in get_all_subclasses(cls):
+                allowed_names.add(convert_model_to_collection(sub))
+
+            result = {INHERITANCE_FIELD_NAME: {"$in": list(allowed_names)}}
+
+        _cached_inheritance_keys[cls] = result
+        return result
 
     @classmethod
     def get_parent_child_fields(cls) -> DICT_TYPE:
         fields = get_model_fields(cls)
         if cls._has_children():
-            for model in cls.__subclasses__():
+            for model in get_all_subclasses(cls):
                 child_fields = get_model_fields(model)
                 fields.update(child_fields)
         return fields
@@ -316,9 +333,10 @@ class Document(_BaseDocument):
 
     def _prepare_crate_data(self, **kwargs: Any) -> DICT_TYPE:
         data = self.to_mongo()
-        if self._get_child() is not None:
-            # Assign the '_cls' field if the model is a child.
-            data = {**self.get_inheritance_key(), **data}
+
+        root, _ = self._get_collection_class()
+        if hasattr(root.ODMConfig, "allow_inheritance") and root.ODMConfig.allow_inheritance is True:
+            data[INHERITANCE_FIELD_NAME] = convert_model_to_collection(self.__class__)
 
         return data
 
@@ -351,8 +369,12 @@ class Document(_BaseDocument):
 
         validate_filter_dict(cls, filter)
 
-        if cls._get_child() is not None:
-            filter = {**cls.get_inheritance_key(), **filter}
+        root, _ = cls._get_collection_class()
+        is_inheritance = hasattr(root.ODMConfig, "allow_inheritance") and root.ODMConfig.allow_inheritance is True
+
+        if is_inheritance:
+            if cls != root:
+                filter = {**cls.get_inheritance_key(), **filter}
 
         return filter
 
@@ -412,29 +434,29 @@ class Document(_BaseDocument):
         return query_set
 
     @classmethod
-    def _get_child_models(cls) -> dict[str, Self]:
+    def _get_child_models(cls) -> dict[str, type[Self]]:
         """Helper method to get child models mapping."""
-        model_children: dict[str, Self] = {}
+        mapping: dict[str, type[Self]] = {}
 
-        for model in cls.__subclasses__():
-            child_model_name = model._get_child()
-            if child_model_name is None:
-                continue
+        root, _ = cls._get_collection_class()
 
-            model_children[child_model_name] = model  # type: ignore
+        mapping[convert_model_to_collection(root)] = root
+        for sub in get_all_subclasses(root):
+            name = convert_model_to_collection(sub)
+            mapping[name] = sub
 
-        return model_children
+        return mapping
 
     @classmethod
     def _prepare_class_instance(
         cls,
-        model_children: dict[str, Self],
+        model_children: dict[str, type[Self]],
         data: DICT_TYPE,
     ) -> Self:
-        if data.get(INHERITANCE_FIELD_NAME) in model_children:
-            """If this is a child model then convert it to that child model."""
-            kls = model_children[data[INHERITANCE_FIELD_NAME]]
-            return kls(**data)  # type: ignore
+        cls_name = data.get(INHERITANCE_FIELD_NAME)
+        if cls_name and cls_name in model_children:
+            target_cls = model_children[cls_name]
+            return target_cls(**data)
 
         return cls(**data)
 

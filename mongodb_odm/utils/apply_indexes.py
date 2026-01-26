@@ -8,6 +8,7 @@ from mongodb_odm.connection import db
 from mongodb_odm.exceptions import ConnectionError, InvalidConnection
 from mongodb_odm.models import INHERITANCE_FIELD_NAME, Document
 from mongodb_odm.types import DICT_TYPE
+from mongodb_odm.utils.utils import get_all_subclasses
 from pydantic import BaseModel
 from pymongo import ASCENDING, TEXT, IndexModel
 from pymongo.asynchronous.collection import AsyncCollection
@@ -146,8 +147,8 @@ def _get_model_indexes(model: type[Document]) -> list[IndexModel]:
 
 def _get_all_indexes() -> list[IndexOperation]:
     """
-    First imports all child models of Document since it's the abstract parent model.
-    Then retrieve all the child modules and will try to get indexes inside the ODMConfig class.
+    First imports all child models of Document.
+    Then retrieve all indexes from Root models and their descendants.
     """
     operations: list[IndexOperation] = []
 
@@ -158,23 +159,26 @@ def _get_all_indexes() -> list[IndexOperation]:
             database_name=model._database_name(),
         )
 
+    # Iterate over direct subclasses of Document (Root models)
     for model in Document.__subclasses__():
-        obj = get_operation_obj(model)
-        if (
+        # Check if the model allows inheritance
+        is_inheritance_root = (
             hasattr(model.ODMConfig, "allow_inheritance")
             and model.ODMConfig.allow_inheritance is True
-        ):
-            """If a model has child model"""
+        )
+
+        obj = get_operation_obj(model)
+
+        if is_inheritance_root:
+            # If inheritance is enabled: add _cls index if configured
             if model.ODMConfig.index_inheritance_field is True:
-                """
-                If index_inheritance_field is true then create an index '_cls'
-                    that will store the name of the child collection name.
-                """
                 obj.model_indexes.append(
                     IndexModel([(INHERITANCE_FIELD_NAME, ASCENDING)])
                 )
-            for child_model in model.__subclasses__():
-                """Get all indexes that are defined in child model"""
+
+            # Get indexes from children
+            all_subclasses = get_all_subclasses(model)
+            for child_model in all_subclasses:
                 obj.model_indexes += _get_model_indexes(child_model)
 
         if obj and obj.model_indexes:
