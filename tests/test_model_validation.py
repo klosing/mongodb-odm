@@ -36,28 +36,6 @@ def test_invalid_allow_inheritance():
 
 
 @pytest.mark.usefixtures(INIT_CONFIG)
-def test_allow_inheritance_true_for_child_and_parent():
-    class Parent(Document):
-        field: Optional[int] = None
-
-        class ODMConfig(Document.ODMConfig):
-            allow_inheritance = True
-
-    class Child(Parent):
-        other_field: Optional[int] = None
-
-        class ODMConfig(Document.ODMConfig):
-            allow_inheritance = True
-
-    with pytest.raises(InvalidConfiguration) as exc_info:
-        _ = Child().create()
-
-    assert type(exc_info.value) is InvalidConfiguration, (
-        "The child model has allow_inheritance=True. ODM does not allow multi level inheritance"
-    )
-
-
-@pytest.mark.usefixtures(INIT_CONFIG)
 def test_invalid_Config():
     class Parent(Document):
         field: Optional[int] = None

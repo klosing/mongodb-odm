@@ -8,6 +8,7 @@ from tests.models.course import (
     EmbeddedComment,
     ImageStyle,
 )
+from tests.models.ship import Ship, SpaceShip, StarfleetShip, Voyager
 from tests.models.user import User
 
 ASYNC_DESCRIPTION = "Async Description"
@@ -19,6 +20,50 @@ TOTAL_CONTENT = 4
 TOTAL_IMAGES = 2
 TOTAL_DESCRIPTIONS = 2
 TOTAL_COMMENTS = 2
+
+TOTAL_SHIPS = 4
+TOTAL_SPACESHIPS = 3
+TOTAL_STARFLEET = 2
+TOTAL_VOYAGER = 1
+
+
+def create_ships():
+    Ship(name="Titanic").create()
+
+    SpaceShip(name="Alien Ship", warp_factor=2.0).create()
+
+    StarfleetShip(
+        name="USS Enterprise", warp_factor=8, registry_number="NCC-1701"
+    ).create()
+
+    Voyager(
+        name="USS Voyager",
+        warp_factor=9.975,
+        registry_number="NCC-74656",
+        seven_on_board=True,
+    ).create()
+
+
+def populate_ship_data():
+    create_ships()
+
+
+async def _async_create_ships():
+    await Ship(name="Titanic").acreate()
+    await SpaceShip(name="Alien Ship", warp_factor=2.0).acreate()
+    await StarfleetShip(
+        name="USS Enterprise", warp_factor=5, registry_number="NCC-1701"
+    ).acreate()
+    await Voyager(
+        name="USS Voyager",
+        warp_factor=9.975,
+        registry_number="NCC-74656",
+        seven_on_board=True,
+    ).acreate()
+
+
+async def async_populate_ship_data():
+    await _async_create_ships()
 
 
 def create_users():
