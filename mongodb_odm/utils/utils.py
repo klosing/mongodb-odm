@@ -12,6 +12,7 @@ NoneType = type(None)
 pattern = re.compile(r"(?<!^)(?=[A-Z])")
 T = TypeVar("T")
 
+
 def camel_to_snake(string: str) -> str:
     return pattern.sub("_", string).lower()
 
@@ -135,6 +136,7 @@ def get_relationship_fields_info(
             fields_name.append(field_name)
 
     return _get_fields_info(cls, fields_name)
+
 
 def get_all_subclasses(cls: type[T]) -> set[type[T]]:
     """

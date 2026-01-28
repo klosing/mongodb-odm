@@ -127,7 +127,9 @@ class _BaseDocument(BaseModel, metaclass=ODMMeta):
         Returns: (RootModel, CurrentModel)
         """
         if cls.__name__ == "Document" and cls.__module__ == "mongodb_odm.models":
-             raise InvalidConfiguration("The Document class should not be used as a model directly")
+            raise InvalidConfiguration(
+                "The Document class should not be used as a model directly"
+            )
 
         root = cls
         for base in cls.__mro__:
@@ -139,8 +141,13 @@ class _BaseDocument(BaseModel, metaclass=ODMMeta):
         if root == cls:
             return root, None
 
-        if not (hasattr(root.ODMConfig, "allow_inheritance") and root.ODMConfig.allow_inheritance is True):
-            raise InvalidConfiguration("The parent should have ODMConfig with allow_inheritance=True")
+        if not (
+            hasattr(root.ODMConfig, "allow_inheritance")
+            and root.ODMConfig.allow_inheritance is True
+        ):
+            raise InvalidConfiguration(
+                "The parent should have ODMConfig with allow_inheritance=True"
+            )
 
         return root, cls
 
@@ -335,7 +342,10 @@ class Document(_BaseDocument):
         data = self.to_mongo()
 
         root, _ = self._get_collection_class()
-        if hasattr(root.ODMConfig, "allow_inheritance") and root.ODMConfig.allow_inheritance is True:
+        if (
+            hasattr(root.ODMConfig, "allow_inheritance")
+            and root.ODMConfig.allow_inheritance is True
+        ):
             data[INHERITANCE_FIELD_NAME] = convert_model_to_collection(self.__class__)
 
         return data
@@ -370,7 +380,10 @@ class Document(_BaseDocument):
         validate_filter_dict(cls, filter)
 
         root, _ = cls._get_collection_class()
-        is_inheritance = hasattr(root.ODMConfig, "allow_inheritance") and root.ODMConfig.allow_inheritance is True
+        is_inheritance = (
+            hasattr(root.ODMConfig, "allow_inheritance")
+            and root.ODMConfig.allow_inheritance is True
+        )
 
         if is_inheritance:
             if cls != root:
@@ -652,24 +665,27 @@ class Document(_BaseDocument):
         pipeline: list[Any],
         inheritance_filter: bool = True,
     ) -> list[Any]:
-        if inheritance_filter and cls._get_child() is not None:
+        root, _ = cls._get_collection_class()
+
+        if inheritance_filter and cls != root:
             """
-            If aggregate was called from the child model then add the "$match" stage
-            to separate the document from other child and parent.
+            If inheritance filtering is enabled and this is not the root model,
+            we restrict the query to the current class and its descendants.
             """
+            inheritance_query = cls.get_inheritance_key()
+
             if len(pipeline) > 0 and "$match" in pipeline[0]:
                 """
                 If the first stage of the pipeline is "$match"
-                update it with the '_cls' field.
+                update it with our inheritance filter.
                 """
                 pipeline[0]["$match"] = {
-                    f"{INHERITANCE_FIELD_NAME}": cls._get_child(),
+                    **inheritance_query,
                     **pipeline[0]["$match"],
                 }
             else:
-                pipeline = [
-                    {"$match": {f"{INHERITANCE_FIELD_NAME}": cls._get_child()}}
-                ] + pipeline
+                # Otherwise, prepend a new "$match" stage to the pipeline.
+                pipeline = [{"$match": inheritance_query}] + pipeline
 
         return pipeline
 
